@@ -9,7 +9,9 @@ public class ModConfig {
     public int tracerColor = 0x00FF80;
     public boolean tracerRequiresItem = false;
     public String tracerItemId = "minecraft:ominous_trial_key";
-    public int renderRadius = 128;
+    /** Number of chunks to search around the player. Kept under the old JSON name for migration. */
+    public int renderRadius = 8;
+    public int configHotkey = 66;
     public boolean refreshEnabled = false;
     public RefreshScope refreshScope = RefreshScope.SERVER_DIMENSION;
     public RefreshMode refreshMode = RefreshMode.REAL_TIME_COOLDOWN;
@@ -17,7 +19,10 @@ public class ModConfig {
     public int dailyResetHour = 0;
 
     public void validate() {
-        renderRadius = Math.max(8, Math.min(512, renderRadius));
+        // Versions before the chunk-based setting stored a block radius (default 128).
+        if (renderRadius > 32) renderRadius = (renderRadius + 15) >> 4;
+        renderRadius = Math.max(1, Math.min(32, renderRadius));
+        configHotkey = Math.max(-1, configHotkey);
         refreshCooldownMinutes = Math.max(1, refreshCooldownMinutes);
         dailyResetHour = Math.max(0, Math.min(23, dailyResetHour));
         if (excludedRenderMode == null) excludedRenderMode = ExcludedRenderMode.HIDE;

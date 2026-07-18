@@ -23,10 +23,10 @@ public class OminousVaultTrackClient implements ClientModInitializer {
         WorldRenderEvents.END_MAIN.register(CONTROLLER::render);
     }
 
-    public static boolean isComboOpenConfigPressed(MinecraftClient client) {
+    public static boolean isConfigHotkeyPressed(MinecraftClient client) {
         if (client.getWindow() == null) return false;
         long handle = client.getWindow().getHandle();
-        return GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_B) == GLFW.GLFW_PRESS
-                && GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_X) == GLFW.GLFW_PRESS;
+        int key = ConfigManager.get().configHotkey;
+        return key >= 0 && GLFW.glfwGetKey(handle, key) == GLFW.GLFW_PRESS;
     }
 }

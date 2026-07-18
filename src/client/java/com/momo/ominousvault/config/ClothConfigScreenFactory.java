@@ -4,6 +4,7 @@ import me.shedaniel.clothconfig2.api.ConfigBuilder;
 import me.shedaniel.clothconfig2.api.ConfigCategory;
 import me.shedaniel.clothconfig2.api.ConfigEntryBuilder;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.text.Text;
 
 public final class ClothConfigScreenFactory {
@@ -35,11 +36,20 @@ public final class ClothConfigScreenFactory {
                 .setDefaultValue(0x40A0FF)
                 .setSaveConsumer(value -> config.excludedColor = value)
                 .build());
-        general.addEntry(entries.startIntSlider(Text.translatable("text.ominous-vault-track.option.render_radius"), config.renderRadius, 8, 512)
-                .setDefaultValue(128)
+        general.addEntry(entries.startIntField(Text.translatable("text.ominous-vault-track.option.render_chunks"), config.renderRadius)
+                .setDefaultValue(8)
+                .setMin(1)
+                .setMax(32)
                 .setSaveConsumer(value -> config.renderRadius = value)
                 .build());
-        general.addEntry(entries.startTextDescription(Text.translatable("text.ominous-vault-track.option.hotkey")).build());
+
+        ConfigCategory keybinds = builder.getOrCreateCategory(Text.translatable("text.ominous-vault-track.category.keybinds"));
+        keybinds.addEntry(entries.startKeyCodeField(
+                        Text.translatable("text.ominous-vault-track.option.hotkey"),
+                        InputUtil.Type.KEYSYM.createFromCode(config.configHotkey))
+                .setDefaultValue(InputUtil.Type.KEYSYM.createFromCode(InputUtil.GLFW_KEY_B))
+                .setKeySaveConsumer(key -> config.configHotkey = key.getCode())
+                .build());
 
         ConfigCategory tracer = builder.getOrCreateCategory(Text.translatable("text.ominous-vault-track.category.tracer"));
         tracer.addEntry(entries.startBooleanToggle(Text.translatable("text.ominous-vault-track.option.render_tracers"), config.renderTracers)

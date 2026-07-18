@@ -6,7 +6,10 @@ import com.momo.ominousvault.config.ConfigManager;
 import com.momo.ominousvault.config.ModConfig;
 import com.momo.ominousvault.storage.VaultKey;
 import com.momo.ominousvault.storage.VaultStorage;
+import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.minecraft.block.BlockState;
@@ -29,17 +32,27 @@ import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
 
 public class VaultTrackerController {
+    private static final int RESCAN_INTERVAL_TICKS = 40;
+    private static final int CHUNKS_SCANNED_PER_TICK = 8;
+
     private final Set<VaultKey> loadedOminousVaults = new HashSet<>();
+    private final Map<Long, Set<VaultKey>> vaultsByChunk = new HashMap<>();
+    private final ArrayDeque<Long> chunksToScan = new ArrayDeque<>();
     private final VaultRenderer renderer = new VaultRenderer();
     private int scanCooldownTicks;
     private int refreshCooldownTicks;
     private boolean comboWasDown;
     private String lastServer = "";
     private String lastDimension = "";
+    private int lastCenterChunkX = Integer.MIN_VALUE;
+    private int lastCenterChunkZ = Integer.MIN_VALUE;
+    private int lastChunkRadius = -1;
+    private static String cachedTracerItemId = "";
+    private static Item cachedTracerItem;
 
     public void tick(MinecraftClient client) {
         if (client.player == null || client.world == null) {
-            loadedOminousVaults.clear();
+            clearScanState();
             comboWasDown = false;
             return;
         }
@@ -49,7 +62,7 @@ public class VaultTrackerController {
         String server = currentServerKey(client);
         String dimension = currentDimensionKey(client.world);
         if (!server.equals(lastServer) || !dimension.equals(lastDimension)) {
-            loadedOminousVaults.clear();
+            clearScanState();
             scanCooldownTicks = 0;
             lastServer = server;
             lastDimension = dimension;
@@ -60,10 +73,25 @@ public class VaultTrackerController {
             VaultStorage.applyRefresh(ConfigManager.get(), server, dimension);
         }
 
-        if (--scanCooldownTicks <= 0) {
-            scanCooldownTicks = 40;
-            scanLoadedVaults(client, server, dimension);
+        ModConfig config = ConfigManager.get();
+        if (!config.enabled) {
+            clearScanState();
+            return;
         }
+
+        BlockPos playerPos = client.player.getBlockPos();
+        int centerChunkX = ChunkSectionPos.getSectionCoord(playerPos.getX());
+        int centerChunkZ = ChunkSectionPos.getSectionCoord(playerPos.getZ());
+        int chunkRadius = config.renderRadius;
+        boolean scanAreaChanged = centerChunkX != lastCenterChunkX
+                || centerChunkZ != lastCenterChunkZ
+                || chunkRadius != lastChunkRadius;
+
+        if (scanAreaChanged || (chunksToScan.isEmpty() && --scanCooldownTicks <= 0)) {
+            scheduleScan(centerChunkX, centerChunkZ, chunkRadius);
+            scanCooldownTicks = RESCAN_INTERVAL_TICKS;
+        }
+        scanQueuedChunks(client.world, server, dimension);
     }
 
     public ActionResult onUseBlock(PlayerEntity player, World world, Hand hand, BlockHitResult hitResult) {
@@ -76,11 +104,7 @@ public class VaultTrackerController {
         MinecraftClient client = MinecraftClient.getInstance();
         VaultKey key = VaultKey.of(currentServerKey(client), currentDimensionKey(world), pos);
         VaultStorage.exclude(key);
-        if (ConfigManager.get().excludedRenderMode == ModConfig.ExcludedRenderMode.HIDE) {
-            loadedOminousVaults.remove(key);
-        } else {
-            loadedOminousVaults.add(key);
-        }
+        loadedOminousVaults.add(key);
 
         return ActionResult.PASS;
     }
@@ -110,57 +134,86 @@ public class VaultTrackerController {
     }
 
     private void handleConfigCombo(MinecraftClient client) {
-        boolean comboDown = OminousVaultTrackClient.isComboOpenConfigPressed(client);
+        boolean comboDown = OminousVaultTrackClient.isConfigHotkeyPressed(client);
         if (comboDown && !comboWasDown && client.currentScreen == null) {
             client.setScreen(ClothConfigScreenFactory.create(null));
         }
         comboWasDown = comboDown;
     }
 
-    private void scanLoadedVaults(MinecraftClient client, String server, String dimension) {
-        ModConfig config = ConfigManager.get();
-        if (!config.enabled || client.player == null || client.world == null) return;
+    private void scheduleScan(int centerChunkX, int centerChunkZ, int chunkRadius) {
+        lastCenterChunkX = centerChunkX;
+        lastCenterChunkZ = centerChunkZ;
+        lastChunkRadius = chunkRadius;
+        chunksToScan.clear();
 
-        ClientWorld world = client.world;
-        BlockPos playerPos = client.player.getBlockPos();
-        int radius = config.renderRadius;
-        int chunkRadius = Math.max(1, (radius + 15) >> 4);
-        int centerChunkX = ChunkSectionPos.getSectionCoord(playerPos.getX());
-        int centerChunkZ = ChunkSectionPos.getSectionCoord(playerPos.getZ());
-        Set<VaultKey> next = new HashSet<>();
-
-        for (int chunkX = centerChunkX - chunkRadius; chunkX <= centerChunkX + chunkRadius; chunkX++) {
-            for (int chunkZ = centerChunkZ - chunkRadius; chunkZ <= centerChunkZ + chunkRadius; chunkZ++) {
-                WorldChunk chunk = world.getChunkManager().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
-                if (chunk == null) continue;
-                scanChunk(chunk, server, dimension, playerPos, radius, config, next);
+        for (int ring = 0; ring <= chunkRadius; ring++) {
+            for (int x = -ring; x <= ring; x++) {
+                enqueueChunk(centerChunkX + x, centerChunkZ - ring);
+                if (ring != 0) enqueueChunk(centerChunkX + x, centerChunkZ + ring);
+            }
+            for (int z = -ring + 1; z < ring; z++) {
+                enqueueChunk(centerChunkX - ring, centerChunkZ + z);
+                if (ring != 0) enqueueChunk(centerChunkX + ring, centerChunkZ + z);
             }
         }
 
-        loadedOminousVaults.clear();
-        loadedOminousVaults.addAll(next);
+        var iterator = vaultsByChunk.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            int chunkX = (int) (long) entry.getKey();
+            int chunkZ = (int) (entry.getKey() >> 32);
+            if (Math.abs((long) chunkX - centerChunkX) > chunkRadius
+                    || Math.abs((long) chunkZ - centerChunkZ) > chunkRadius) {
+                loadedOminousVaults.removeAll(entry.getValue());
+                iterator.remove();
+            }
+        }
     }
 
-    private void scanChunk(
-            WorldChunk chunk,
-            String server,
-            String dimension,
-            BlockPos playerPos,
-            int radius,
-            ModConfig config,
-            Set<VaultKey> next
-    ) {
-        int radiusSquared = radius * radius;
-        for (BlockPos pos : chunk.getBlockEntities().keySet()) {
-            if (pos.getSquaredDistance(playerPos) > radiusSquared) continue;
+    private void enqueueChunk(int chunkX, int chunkZ) {
+        chunksToScan.addLast(packChunk(chunkX, chunkZ));
+    }
 
+    private void scanQueuedChunks(ClientWorld world, String server, String dimension) {
+        for (int count = 0; count < CHUNKS_SCANNED_PER_TICK && !chunksToScan.isEmpty(); count++) {
+            long packed = chunksToScan.removeFirst();
+            int chunkX = (int) packed;
+            int chunkZ = (int) (packed >> 32);
+            WorldChunk chunk = world.getChunkManager().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+            Set<VaultKey> previous = vaultsByChunk.remove(packed);
+            if (previous != null) loadedOminousVaults.removeAll(previous);
+            if (chunk == null) continue;
+
+            Set<VaultKey> found = scanChunk(chunk, server, dimension);
+            if (!found.isEmpty()) {
+                vaultsByChunk.put(packed, found);
+                loadedOminousVaults.addAll(found);
+            }
+        }
+    }
+
+    private Set<VaultKey> scanChunk(WorldChunk chunk, String server, String dimension) {
+        Set<VaultKey> found = new HashSet<>();
+        for (BlockPos pos : chunk.getBlockEntities().keySet()) {
             BlockState state = chunk.getBlockState(pos);
             if (!isOminousVault(state)) continue;
-
-            VaultKey key = VaultKey.of(server, dimension, pos);
-            if (VaultStorage.isExcluded(key) && config.excludedRenderMode == ModConfig.ExcludedRenderMode.HIDE) continue;
-            next.add(key);
+            found.add(VaultKey.of(server, dimension, pos));
         }
+        return found;
+    }
+
+    private void clearScanState() {
+        loadedOminousVaults.clear();
+        vaultsByChunk.clear();
+        chunksToScan.clear();
+        lastCenterChunkX = Integer.MIN_VALUE;
+        lastCenterChunkZ = Integer.MIN_VALUE;
+        lastChunkRadius = -1;
+    }
+
+    private static long packChunk(int chunkX, int chunkZ) {
+        return Integer.toUnsignedLong(chunkX) | ((long) chunkZ << 32);
     }
 
     public static boolean shouldRenderTracer(MinecraftClient client, ModConfig config) {
@@ -169,7 +222,11 @@ public class VaultTrackerController {
 
         Identifier id = Identifier.tryParse(config.tracerItemId);
         if (id == null) return false;
-        Item item = Registries.ITEM.get(id);
-        return client.player != null && (client.player.getMainHandStack().isOf(item) || client.player.getOffHandStack().isOf(item));
+        if (!config.tracerItemId.equals(cachedTracerItemId)) {
+            cachedTracerItemId = config.tracerItemId;
+            cachedTracerItem = Registries.ITEM.get(id);
+        }
+        return client.player != null && cachedTracerItem != null
+                && (client.player.getMainHandStack().isOf(cachedTracerItem) || client.player.getOffHandStack().isOf(cachedTracerItem));
     }
 }

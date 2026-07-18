@@ -10,6 +10,7 @@
   "contact": {},
   "license": "MIT",
   "environment": "client",
+  "accessWidener": "ominous-vault-track.accesswidener",
   "entrypoints": {
     "main": [
       "com.momo.ominousvault.OminousVaultTrack"
