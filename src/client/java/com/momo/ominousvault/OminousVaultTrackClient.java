@@ -5,6 +5,7 @@ import com.momo.ominousvault.config.ConfigManager;
 import com.momo.ominousvault.storage.VaultStorage;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.client.Minecraft;
@@ -19,6 +20,8 @@ public class OminousVaultTrackClient implements ClientModInitializer {
         VaultStorage.init();
 
         ClientTickEvents.END_CLIENT_TICK.register(CONTROLLER::tick);
+        ClientChunkEvents.CHUNK_LOAD.register(CONTROLLER::onChunkLoad);
+        ClientChunkEvents.CHUNK_UNLOAD.register(CONTROLLER::onChunkUnload);
         UseBlockCallback.EVENT.register(CONTROLLER::onUseBlock);
         LevelRenderEvents.END_MAIN.register(CONTROLLER::render);
     }

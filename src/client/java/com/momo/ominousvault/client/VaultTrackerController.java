@@ -110,6 +110,23 @@ public class VaultTrackerController {
         return InteractionResult.PASS;
     }
 
+    public void onChunkLoad(ClientLevel world, LevelChunk chunk) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.level != world || !ConfigManager.get().enabled) return;
+
+        int chunkX = chunk.getPos().x();
+        int chunkZ = chunk.getPos().z();
+        scanAndStoreChunk(packChunk(chunkX, chunkZ), chunk,
+                currentServerKey(client), currentDimensionKey(world));
+    }
+
+    public void onChunkUnload(ClientLevel world, LevelChunk chunk) {
+        long packed = packChunk(chunk.getPos().x(), chunk.getPos().z());
+        Set<VaultKey> previous = vaultsByChunk.remove(packed);
+        if (previous != null) loadedOminousVaults.removeAll(previous);
+        chunksToScan.removeFirstOccurrence(packed);
+    }
+
     public void render(LevelRenderContext context) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null || client.level == null || !ConfigManager.get().enabled) return;
@@ -160,17 +177,6 @@ public class VaultTrackerController {
             }
         }
 
-        var iterator = vaultsByChunk.entrySet().iterator();
-        while (iterator.hasNext()) {
-            var entry = iterator.next();
-            int chunkX = (int) (long) entry.getKey();
-            int chunkZ = (int) (entry.getKey() >> 32);
-            if (Math.abs((long) chunkX - centerChunkX) > chunkRadius
-                    || Math.abs((long) chunkZ - centerChunkZ) > chunkRadius) {
-                loadedOminousVaults.removeAll(entry.getValue());
-                iterator.remove();
-            }
-        }
     }
 
     private void enqueueChunk(int chunkX, int chunkZ) {
@@ -184,15 +190,19 @@ public class VaultTrackerController {
             int chunkX = (int) packed;
             int chunkZ = (int) (packed >> 32);
             LevelChunk chunk = world.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
-            Set<VaultKey> previous = vaultsByChunk.remove(packed);
-            if (previous != null) loadedOminousVaults.removeAll(previous);
             if (chunk == null) continue;
+            scanAndStoreChunk(packed, chunk, server, dimension);
+        }
+    }
 
-            Set<VaultKey> found = scanChunk(chunk, server, dimension);
-            if (!found.isEmpty()) {
-                vaultsByChunk.put(packed, found);
-                loadedOminousVaults.addAll(found);
-            }
+    private void scanAndStoreChunk(long packed, LevelChunk chunk, String server, String dimension) {
+        Set<VaultKey> previous = vaultsByChunk.remove(packed);
+        if (previous != null) loadedOminousVaults.removeAll(previous);
+
+        Set<VaultKey> found = scanChunk(chunk, server, dimension);
+        if (!found.isEmpty()) {
+            vaultsByChunk.put(packed, found);
+            loadedOminousVaults.addAll(found);
         }
     }
 
