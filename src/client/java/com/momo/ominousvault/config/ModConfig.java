@@ -19,8 +19,6 @@ public class ModConfig {
     public int dailyResetHour = 0;
 
     public void validate() {
-        // Versions before the chunk-based setting stored a block radius (default 128).
-        // Convert larger legacy values once while keeping the existing JSON field compatible.
         if (renderRadius > 32) renderRadius = (renderRadius + 15) >> 4;
         renderRadius = Math.max(1, Math.min(32, renderRadius));
         configHotkey = Math.max(-1, configHotkey);

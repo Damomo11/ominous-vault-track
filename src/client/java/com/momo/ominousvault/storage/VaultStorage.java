@@ -21,8 +21,6 @@ import net.fabricmc.loader.api.FabricLoader;
 public final class VaultStorage {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Path STORAGE_PATH = FabricLoader.getInstance().getConfigDir().resolve(OminousVaultTrack.MOD_ID + "-vaults.json");
-    // VaultKey already has efficient value-based equality. Keeping it as the map key avoids
-    // rebuilding a concatenated scoped string during every lookup (including every render frame).
     private static final Map<VaultKey, VaultRecord> RECORDS = new HashMap<>();
 
     private VaultStorage() {
